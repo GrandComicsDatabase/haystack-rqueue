@@ -1,4 +1,11 @@
-from django.db.models import signals, get_model
+from django.db.models import signals
+from django.db import connection
+
+try:
+    from django.apps import apps
+    get_model = apps.get_model
+except ImportError:
+    from django.db.models import get_model
 
 from haystack.signals import BaseSignalProcessor
 
@@ -25,9 +32,9 @@ def split_obj_identifier(obj_identifier):
     if len(bits) < 2:
         return (None, None)
 
-    pk = bits[-1]
+    pk = '.'.join(bits[2:])
     # In case Django ever handles full paths...
-    object_path = '.'.join(bits[:-1])
+    object_path = '.'.join(bits[0:2])
     return (object_path, pk)
 
 
@@ -48,6 +55,8 @@ def get_index_for_model(model_class, connection=DEFAULT_ALIAS):
 
 
 def index_update_obj(object_id):
+    connection.close()
+
     object_path, pk = split_obj_identifier(object_id)
     if not (object_path or pk):
         return
@@ -64,6 +73,8 @@ def index_update_obj(object_id):
     index.update_object(obj)
 
 def index_delete_obj(object_id):
+    connection.close()
+
     object_path, pk = split_obj_identifier(object_id)
     if not (object_path or pk):
         return
@@ -91,8 +102,7 @@ class RQueueSignalProcessor(BaseSignalProcessor):
             model_class=model_class.__name__,
         )
 
-    def setup(self):
-
+    def connect_signals(self):
         for using in self.connections.connections_info.keys():
             for model_class in self.connections[using].get_unified_index().get_indexed_models():
                 signals.post_save.connect(
@@ -104,6 +114,19 @@ class RQueueSignalProcessor(BaseSignalProcessor):
                 signals.post_delete.connect(
                     self.enqueue_delete, sender=model_class,
                     dispatch_uid=self._get_dispatch_uid(model_class) + '-delete')
+
+    def setup(self):
+        try:
+            from django.apps import apps
+            models_ready = apps.models_ready
+        except ImportError:
+            models_ready = True
+
+        if models_ready:
+            self.connect_signals()
+        else:
+            from haystack_rqueue import HaystackRqueueAppConfig
+            HaystackRqueueAppConfig.init = self.connect_signals
 
     def teardown(self):
         signals.post_save.disconnect(self.enqueue_save)
