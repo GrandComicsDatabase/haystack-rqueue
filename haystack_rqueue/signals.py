@@ -69,8 +69,12 @@ def index_update_obj(object_id):
     if not index:
         return
 
-    obj = model_class._default_manager.get(pk=pk)
-    index.update_object(obj)
+    try:
+        obj = model_class._default_manager.get(pk=pk)
+        index._get_backend(DEFAULT_ALIAS).update(index, [obj])
+    except model_class.DoesNotExist:
+        pass
+
 
 def index_delete_obj(object_id):
     connection.close()
